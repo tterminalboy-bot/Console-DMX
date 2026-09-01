@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebDMX - Style Maestro</title>
+    <style>
+        :root {
+            --bg-dark: #121212;
+            --panel-bg: #1e1e24;
+            --accent: #00ffcc;
+            --text-main: #ffffff;
+            --text-muted: #888;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* En-tête */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: var(--panel-bg);
+            padding: 15px 25px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        h1 { margin: 0; font-size: 1.5rem; letter-spacing: 1px; }
+        .accent-text { color: var(--accent); }
+
+        button.connect-btn {
+            background-color: var(--accent);
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            font-weight: bold;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        button.connect-btn:hover { background-color: #00cca3; box-shadow: 0 0 10px var(--accent); }
+
+        /* Grille principale */
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 2fr 1fr;
+            gap: 20px;
+            height: calc(100vh - 120px);
+        }
+
+        .panel {
+            background-color: var(--panel-bg);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .panel h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #333; padding-bottom: 10px; }
+
+        /* Machines / Fixtures */
+        .fixture-list { list-style: none; padding: 0; margin: 0; }
+        .fixture-item {
+            background: #2a2a35;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            cursor: pointer;
+        }
+        .fixture-item:hover { border: 1px solid var(--accent); }
+
+        /* Générateur d'effets */
+        .effects-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        
+        .effect-btn {
+            background: #2a2a35;
+            color: white;
+            border: 1px solid #444;
+            padding: 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: 0.2s;
+            font-size: 1rem;
+        }
+        
+        .effect-btn:hover { background: #3a3a45; border-color: var(--accent); }
+        .effect-btn.active { background: var(--accent); color: #000; }
+
+        /* Master & Couleurs */
+        .slider-container { display: flex; flex-direction: column; gap: 5px; }
+        input[type=range] { width: 100%; cursor: pointer; accent-color: var(--accent); }
+        input[type=color] { width: 100%; height: 50px; border: none; cursor: pointer; background: transparent; }
+
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Web<span class="accent-text">DMX</span> Dashboard</h1>
+        <button id="connectBtn" class="connect-btn">Connecter l'interface USB</button>
+    </header>
+
+    <div class="dashboard">
+        <div class="panel">
+            <h2>Mes Machines</h2>
+            <ul class="fixture-list">
+                <li class="fixture-item"><span>Par LED 1</span> <span>CH 1-7</span></li>
+                <li class="fixture-item"><span>Par LED 2</span> <span>CH 8-14</span></li>
+                <li class="fixture-item"><span>Lyre Wash</span> <span>CH 15-28</span></li>
+            </ul>
+        </div>
+
+        <div class="panel">
+            <h2>Générateur d'Effets</h2>
+            <div class="effects-grid">
+                <button class="effect-btn" id="btnStrobe">Strobe Intense</button>
+                <button class="effect-btn" id="btnFade">Color Fade</button>
+                <button class="effect-btn" id="btnPulse">Pulse (BPM)</button>
+                <button class="effect-btn" id="btnBlackout" style="border-color: red;">BLACKOUT</button>
+            </div>
+
+            <h2 style="margin-top: 20px;">Couleur Globale</h2>
+            <input type="color" id="globalColor" value="#00ffcc">
+        </div>
+
+        <div class="panel">
+            <h2>Master</h2>
+            <div class="slider-container">
+                <label for="masterDimmer">Intensité (Dimmer)</label>
+                <input type="range" id="masterDimmer" min="0" max="255" value="255">
+            </div>
+            <div class="slider-container" style="margin-top: 20px;">
+                <label for="speedSlider">Vitesse des effets</label>
+                <input type="range" id="speedSlider" min="1" max="100" value="50">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- LOGIQUE WEB SERIAL & DMX ---
+        let port = null;
+        let writer = null;
+        // Tableau DMX (1 start code + 512 canaux)
+        let dmxData = new Uint8Array(513); 
+        let dmxInterval = null;
+
+        const connectBtn = document.getElementById('connectBtn');
+        const masterDimmer = document.getElementById('masterDimmer');
+        const btnBlackout = document.getElementById('btnBlackout');
+        const globalColor = document.getElementById('globalColor');
+
+        // Fonction pour se connecter au port USB
+        connectBtn.addEventListener('click', async () => {
+            try {
+                // Demande à l'utilisateur de choisir le port série (ex: Enttec DMX)
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 250000, dataBits: 8, stopBits: 2, parity: "none" }); // Specs standards DMX
+                
+                writer = port.writable.getWriter();
+                connectBtn.textContent = "Connecté !";
+                connectBtn.style.backgroundColor = "#4caf50";
+
+                // Boucle d'envoi DMX (environ 40 images par seconde)
+                if(!dmxInterval) {
+                    dmxInterval = setInterval(sendDMX, 25);
+                }
+            } catch (err) {
+                console.error("Erreur de connexion :", err);
+                alert("Impossible de se connecter. Assure-toi que l'appareil est branché et que ton navigateur supporte Web Serial.");
+            }
+        });
+
+        // Fonction pour envoyer les trames DMX
+        async function sendDMX() {
+            if (!writer) return;
+            try {
+                // Envoyer un "Break" (spécifique au DMX, nécessite souvent des ruses via Web Serial)
+                // Ici on envoie les données brutes pour le prototype
+                await writer.write(dmxData);
+            } catch (err) {
+                console.error("Erreur d'envoi :", err);
+            }
+        }
+
+        // --- INTERACTIONS INTERFACE ---
+
+        // Dimmer Master
+        masterDimmer.addEventListener('input', (e) => {
+            const val = e.target.value;
+            // Exemple : Appliquer le dimmer sur le canal 1
+            dmxData[1] = val; 
+            console.log("Master Dimmer :", val);
+        });
+
+        // Changement de couleur
+        globalColor.addEventListener('input', (e) => {
+            const hex = e.target.value;
+            // Convertir Hex en RGB
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            
+            // Exemple : Assigner RGB aux canaux 2, 3 et 4
+            dmxData[2] = r;
+            dmxData[3] = g;
+            dmxData[4] = b;
+        });
+
+        // Blackout
+        btnBlackout.addEventListener('click', () => {
+            dmxData.fill(0); // Met tous les canaux à 0
+            masterDimmer.value = 0;
+            console.log("BLACKOUT ACTIF");
+        });
+
+        // Effets visuels sur les boutons (Mock)
+        document.querySelectorAll('.effect-btn:not(#btnBlackout)').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.target.classList.toggle('active');
+                // Ici viendrait la logique JS pour générer des chasers, des fades, etc.
+            });
+        });
+    </script>
+</body>
+</html><!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebDMX - Style Maestro</title>
+    <style>
+        :root {
+            --bg-dark: #121212;
+            --panel-bg: #1e1e24;
+            --accent: #00ffcc;
+            --text-main: #ffffff;
+            --text-muted: #888;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* En-tête */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: var(--panel-bg);
+            padding: 15px 25px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        h1 { margin: 0; font-size: 1.5rem; letter-spacing: 1px; }
+        .accent-text { color: var(--accent); }
+
+        button.connect-btn {
+            background-color: var(--accent);
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            font-weight: bold;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        button.connect-btn:hover { background-color: #00cca3; box-shadow: 0 0 10px var(--accent); }
+
+        /* Grille principale */
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 2fr 1fr;
+            gap: 20px;
+            height: calc(100vh - 120px);
+        }
+
+        .panel {
+            background-color: var(--panel-bg);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .panel h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #333; padding-bottom: 10px; }
+
+        /* Machines / Fixtures */
+        .fixture-list { list-style: none; padding: 0; margin: 0; }
+        .fixture-item {
+            background: #2a2a35;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            cursor: pointer;
+        }
+        .fixture-item:hover { border: 1px solid var(--accent); }
+
+        /* Générateur d'effets */
+        .effects-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        
+        .effect-btn {
+            background: #2a2a35;
+            color: white;
+            border: 1px solid #444;
+            padding: 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: 0.2s;
+            font-size: 1rem;
+        }
+        
+        .effect-btn:hover { background: #3a3a45; border-color: var(--accent); }
+        .effect-btn.active { background: var(--accent); color: #000; }
+
+        /* Master & Couleurs */
+        .slider-container { display: flex; flex-direction: column; gap: 5px; }
+        input[type=range] { width: 100%; cursor: pointer; accent-color: var(--accent); }
+        input[type=color] { width: 100%; height: 50px; border: none; cursor: pointer; background: transparent; }
+
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Web<span class="accent-text">DMX</span> Dashboard</h1>
+        <button id="connectBtn" class="connect-btn">Connecter l'interface USB</button>
+    </header>
+
+    <div class="dashboard">
+        <div class="panel">
+            <h2>Mes Machines</h2>
+            <ul class="fixture-list">
+                <li class="fixture-item"><span>Par LED 1</span> <span>CH 1-7</span></li>
+                <li class="fixture-item"><span>Par LED 2</span> <span>CH 8-14</span></li>
+                <li class="fixture-item"><span>Lyre Wash</span> <span>CH 15-28</span></li>
+            </ul>
+        </div>
+
+        <div class="panel">
+            <h2>Générateur d'Effets</h2>
+            <div class="effects-grid">
+                <button class="effect-btn" id="btnStrobe">Strobe Intense</button>
+                <button class="effect-btn" id="btnFade">Color Fade</button>
+                <button class="effect-btn" id="btnPulse">Pulse (BPM)</button>
+                <button class="effect-btn" id="btnBlackout" style="border-color: red;">BLACKOUT</button>
+            </div>
+
+            <h2 style="margin-top: 20px;">Couleur Globale</h2>
+            <input type="color" id="globalColor" value="#00ffcc">
+        </div>
+
+        <div class="panel">
+            <h2>Master</h2>
+            <div class="slider-container">
+                <label for="masterDimmer">Intensité (Dimmer)</label>
+                <input type="range" id="masterDimmer" min="0" max="255" value="255">
+            </div>
+            <div class="slider-container" style="margin-top: 20px;">
+                <label for="speedSlider">Vitesse des effets</label>
+                <input type="range" id="speedSlider" min="1" max="100" value="50">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- LOGIQUE WEB SERIAL & DMX ---
+        let port = null;
+        let writer = null;
+        // Tableau DMX (1 start code + 512 canaux)
+        let dmxData = new Uint8Array(513); 
+        let dmxInterval = null;
+
+        const connectBtn = document.getElementById('connectBtn');
+        const masterDimmer = document.getElementById('masterDimmer');
+        const btnBlackout = document.getElementById('btnBlackout');
+        const globalColor = document.getElementById('globalColor');
+
+        // Fonction pour se connecter au port USB
+        connectBtn.addEventListener('click', async () => {
+            try {
+                // Demande à l'utilisateur de choisir le port série (ex: Enttec DMX)
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 250000, dataBits: 8, stopBits: 2, parity: "none" }); // Specs standards DMX
+                
+                writer = port.writable.getWriter();
+                connectBtn.textContent = "Connecté !";
+                connectBtn.style.backgroundColor = "#4caf50";
+
+                // Boucle d'envoi DMX (environ 40 images par seconde)
+                if(!dmxInterval) {
+                    dmxInterval = setInterval(sendDMX, 25);
+                }
+            } catch (err) {
+                console.error("Erreur de connexion :", err);
+                alert("Impossible de se connecter. Assure-toi que l'appareil est branché et que ton navigateur supporte Web Serial.");
+            }
+        });
+
+        // Fonction pour envoyer les trames DMX
+        async function sendDMX() {
+            if (!writer) return;
+            try {
+                // Envoyer un "Break" (spécifique au DMX, nécessite souvent des ruses via Web Serial)
+                // Ici on envoie les données brutes pour le prototype
+                await writer.write(dmxData);
+            } catch (err) {
+                console.error("Erreur d'envoi :", err);
+            }
+        }
+
+        // --- INTERACTIONS INTERFACE ---
+
+        // Dimmer Master
+        masterDimmer.addEventListener('input', (e) => {
+            const val = e.target.value;
+            // Exemple : Appliquer le dimmer sur le canal 1
+            dmxData[1] = val; 
+            console.log("Master Dimmer :", val);
+        });
+
+        // Changement de couleur
+        globalColor.addEventListener('input', (e) => {
+            const hex = e.target.value;
+            // Convertir Hex en RGB
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            
+            // Exemple : Assigner RGB aux canaux 2, 3 et 4
+            dmxData[2] = r;
+            dmxData[3] = g;
+            dmxData[4] = b;
+        });
+
+        // Blackout
+        btnBlackout.addEventListener('click', () => {
+            dmxData.fill(0); // Met tous les canaux à 0
+            masterDimmer.value = 0;
+            console.log("BLACKOUT ACTIF");
+        });
+
+        // Effets visuels sur les boutons (Mock)
+        document.querySelectorAll('.effect-btn:not(#btnBlackout)').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.target.classList.toggle('active');
+                // Ici viendrait la logique JS pour générer des chasers, des fades, etc.
+            });
+        });
+    </script>
+</body>
+</html>
